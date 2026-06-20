@@ -47,6 +47,7 @@ type DriverCommandResult = {
   ok?: boolean;
   command?: DriverCommand;
   delivery_id?: string;
+  next_delivery_id?: string | null;
   message?: string;
   motorcyclist_id?: string;
 };
@@ -57,6 +58,24 @@ type TelegramReplyMarkup = {
     callback_data: string;
   }>>;
 };
+
+type Related<T> = T | T[] | null;
+
+type DeliveryForTelegram = {
+  id: string;
+  destination_address: string;
+  status: string;
+  shops: Related<{ name: string | null }>;
+  motorcyclists: Related<{
+    name: string | null;
+    telegram_chat_id: string | null;
+  }>;
+};
+
+function firstRelated<T>(value: Related<T>) {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
+}
 
 function normalizeCommandText(value?: string | null) {
   return (value ?? '')
@@ -245,6 +264,58 @@ async function sendTelegramText(chatId: string, body: string, replyMarkup?: Tele
   }
 }
 
+function buildDeliveryCallText(delivery: DeliveryForTelegram) {
+  const shop = firstRelated(delivery.shops);
+  const shopName = telegramText(shop?.name ?? 'Loja', 120);
+  const destination = telegramText(delivery.destination_address, 600);
+  const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? 'https://sistemas-pi.vercel.app'}/motoqueiro/dashboard`;
+
+  return telegramText(
+    [
+      'Nova corrida disponivel.',
+      '',
+      `Loja: ${shopName}`,
+      `Destino: ${destination}`,
+      '',
+      'Use os botoes abaixo ou abra o sistema:',
+      dashboardUrl,
+    ].join('\n')
+  );
+}
+
+async function notifyAssignedDelivery(deliveryId?: string | null) {
+  if (!deliveryId) return;
+
+  const supabase = createSupabaseAdmin();
+  if (!supabase) return;
+
+  const { data, error } = await supabase
+    .from('deliveries')
+    .select('id,destination_address,status,shops(name),motorcyclists(name,telegram_chat_id)')
+    .eq('id', deliveryId)
+    .maybeSingle();
+
+  if (error || !data) {
+    console.error('Erro ao buscar proxima entrega para Telegram:', error?.message ?? 'Entrega nao encontrada');
+    return;
+  }
+
+  const delivery = data as unknown as DeliveryForTelegram;
+  const driver = firstRelated(delivery.motorcyclists);
+  if (!driver?.telegram_chat_id || delivery.status !== 'assigned') return;
+
+  await sendTelegramText(
+    driver.telegram_chat_id,
+    buildDeliveryCallText(delivery),
+    {
+      inline_keyboard: [[
+        { text: 'Aceitar', callback_data: `delivery:accept:${delivery.id}` },
+        { text: 'Recusar', callback_data: `delivery:reject:${delivery.id}` },
+      ]],
+    }
+  );
+}
+
 async function clearMessageKeyboard(chatId?: string | number | null, messageId?: number | null) {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   if (!botToken || !chatId || !messageId) return;
@@ -380,7 +451,7 @@ async function processDriverCommand(payload: TelegramWebhookPayload) {
 
   const { data, error } = await supabase.rpc('telegram_handle_driver_command', {
     telegram_chat_id_input: String(chatId),
-    command_input: command,
+    command_input: callbackDeliveryId ? `${command}:${callbackDeliveryId}` : command,
   });
 
   if (callback) {
@@ -395,6 +466,10 @@ async function processDriverCommand(payload: TelegramWebhookPayload) {
   }
 
   const result = (data ?? {}) as DriverCommandResult;
+  if (result.ok && result.command === 'reject' && result.next_delivery_id) {
+    await notifyAssignedDelivery(result.next_delivery_id);
+  }
+
   await sendTelegramText(
     String(chatId),
     buildReplyText(result, message?.text ?? callback?.data),

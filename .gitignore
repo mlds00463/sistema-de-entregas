@@ -1,0 +1,10 @@
+node_modules
+.tools
+.next
+.vercel
+out
+.env*
+!.env.example
+.DS_Store
+.vercel
+cafe_madalena/
