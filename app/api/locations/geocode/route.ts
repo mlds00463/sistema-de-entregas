@@ -1,26 +1,12 @@
+import { NextRequest, NextResponse } from 'next/server';
 import { buildGeocodeQueries } from '@/lib/geocodeUtils';
-
-export type GeoPoint = {
-  latitude: number;
-  longitude: number;
-};
 
 type NominatimResult = {
   lat: string;
   lon: string;
 };
 
-async function geocodeViaApp(query: string): Promise<GeoPoint | null> {
-  if (typeof window === 'undefined') return null;
-
-  const response = await fetch(`/api/locations/geocode?address=${encodeURIComponent(query)}`);
-  if (!response.ok) return null;
-
-  const payload = await response.json() as { coordinates?: GeoPoint | null };
-  return payload.coordinates ?? null;
-}
-
-async function geocodeViaNominatim(query: string): Promise<GeoPoint | null> {
+async function geocodeQuery(query: string) {
   const url = new URL('https://nominatim.openstreetmap.org/search');
   url.searchParams.set('format', 'json');
   url.searchParams.set('limit', '1');
@@ -30,6 +16,8 @@ async function geocodeViaNominatim(query: string): Promise<GeoPoint | null> {
   const response = await fetch(url.toString(), {
     headers: {
       Accept: 'application/json',
+      'Accept-Language': 'pt-BR,pt;q=0.9',
+      'User-Agent': 'MR-Entregas/1.0 (https://sistemas-pi.vercel.app)',
     },
   });
 
@@ -47,25 +35,20 @@ async function geocodeViaNominatim(query: string): Promise<GeoPoint | null> {
   return { latitude, longitude };
 }
 
-export async function geocodeAddress(address: string): Promise<GeoPoint | null> {
+export async function GET(request: NextRequest) {
+  const address = request.nextUrl.searchParams.get('address') ?? '';
   const queries = buildGeocodeQueries(address);
-  if (queries.length === 0) return null;
 
   for (const query of queries) {
     try {
-      const coordinates = await geocodeViaApp(query);
-      if (coordinates) return coordinates;
-    } catch {
-      // Fall through to Nominatim below.
-    }
-
-    try {
-      const coordinates = await geocodeViaNominatim(query);
-      if (coordinates) return coordinates;
+      const coordinates = await geocodeQuery(query);
+      if (coordinates) {
+        return NextResponse.json({ coordinates, query });
+      }
     } catch {
       // Try the next simplified query.
     }
   }
 
-  return null;
+  return NextResponse.json({ coordinates: null });
 }

@@ -3,6 +3,7 @@
 import L from 'leaflet';
 import { useEffect, useMemo, useState } from 'react';
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
+import { compactAddressParts, isCompleteAddress, simplifyBrazilianAddress } from '@/lib/geocodeUtils';
 import type { Delivery, DriverLocationPoint, Motorcyclist, Shop } from '@/lib/types';
 import { geocodeAddress } from '@/services/geocodeService';
 import { getDriverLocationPointsForPeriod } from '@/services/locationService';
@@ -61,29 +62,37 @@ function RecenterMap({ center }: { center: [number, number] }) {
 }
 
 function buildShopMapAddress(shop: Shop) {
-  return [
-    shop.address,
-    shop.number,
-    shop.complement,
-    shop.neighborhood,
-    shop.city,
-    shop.state,
-    shop.zipcode ? `CEP ${shop.zipcode}` : '',
-    'Brasil',
-  ].filter(Boolean).join(', ');
+  const address = isCompleteAddress(shop.address, shop.city, shop.zipcode)
+    ? compactAddressParts([shop.address, 'Brasil'])
+    : compactAddressParts([
+      shop.address,
+      shop.number,
+      shop.complement,
+      shop.neighborhood,
+      shop.city,
+      shop.state,
+      shop.zipcode ? `CEP ${shop.zipcode}` : '',
+      'Brasil',
+    ]);
+
+  return simplifyBrazilianAddress(address);
 }
 
 function buildDeliveryMapAddress(delivery: Delivery) {
-  return [
-    delivery.destination_address,
-    delivery.destination_number,
-    delivery.destination_complement,
-    delivery.destination_neighborhood,
-    delivery.destination_city,
-    delivery.destination_state,
-    delivery.destination_zipcode ? `CEP ${delivery.destination_zipcode}` : '',
-    'Brasil',
-  ].filter(Boolean).join(', ');
+  const address = isCompleteAddress(delivery.destination_address, delivery.destination_city, delivery.destination_zipcode)
+    ? compactAddressParts([delivery.destination_address, 'Brasil'])
+    : compactAddressParts([
+      delivery.destination_address,
+      delivery.destination_number,
+      delivery.destination_complement,
+      delivery.destination_neighborhood,
+      delivery.destination_city,
+      delivery.destination_state,
+      delivery.destination_zipcode ? `CEP ${delivery.destination_zipcode}` : '',
+      'Brasil',
+    ]);
+
+  return simplifyBrazilianAddress(address);
 }
 
 export default function LiveMap({
