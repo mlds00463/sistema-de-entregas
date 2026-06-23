@@ -1,12 +1,13 @@
 'use client';
 
-import { AlertTriangle, CheckCircle2, KeyRound, Lock, RefreshCw, Save, Unlock } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Copy, ExternalLink, KeyRound, Link as LinkIcon, Lock, RefreshCw, Save, Unlock } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import ProtectedPage from '@/components/ProtectedPage';
 import { roleLabel } from '@/lib/access';
 import { formatCurrency } from '@/lib/format';
 import type { Profile, Shop, SubscriptionStatus } from '@/lib/types';
 import { generateEmergencyCode, getAdminProfiles, getAdminShops, setShopBlocked, updateShopSubscription } from '@/services/adminService';
+import { makeShopRegistrationUrl } from '@/services/shopService';
 
 const statusOptions: SubscriptionStatus[] = ['trial', 'active', 'overdue', 'blocked'];
 type DiscountType = 'none' | 'fixed' | 'percent';
@@ -20,6 +21,7 @@ type ShopForm = {
   status: SubscriptionStatus;
 };
 const DEFAULT_MONTHLY_PRICE = 99;
+const DEFAULT_PUBLIC_ORIGIN = 'https://sistemas-pi.vercel.app';
 const emptyShopForm: ShopForm = {
   trialDays: '',
   monthlyPrice: String(DEFAULT_MONTHLY_PRICE),
@@ -76,6 +78,7 @@ export default function AdminMasterPage() {
   const [formByShop, setFormByShop] = useState<Record<string, ShopForm>>({});
   const [globalDiscountType, setGlobalDiscountType] = useState<DiscountType>('none');
   const [globalDiscountValue, setGlobalDiscountValue] = useState('0');
+  const [publicOrigin, setPublicOrigin] = useState(DEFAULT_PUBLIC_ORIGIN);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -115,6 +118,10 @@ export default function AdminMasterPage() {
     load();
   }, [load]);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined') setPublicOrigin(window.location.origin);
+  }, []);
+
   const overdueShops = useMemo(() => shops.filter((shop) => ['overdue', 'blocked'].includes(shop.subscription_status ?? '')), [shops]);
   const activeShops = useMemo(() => shops.filter((shop) => ['trial', 'active'].includes(shop.subscription_status ?? '')), [shops]);
   const monthlyRevenue = useMemo(() => shops.reduce((sum, shop) => (
@@ -122,6 +129,17 @@ export default function AdminMasterPage() {
       ? sum + Number(shop.monthly_price ?? DEFAULT_MONTHLY_PRICE)
       : sum
   ), 0), [shops]);
+  const lojistaSignupUrl = useMemo(() => `${publicOrigin}/cadastro/lojista`, [publicOrigin]);
+
+  async function copyLink(label: string, value: string) {
+    setError(null);
+    try {
+      await navigator.clipboard.writeText(value);
+      setMessage(`${label} copiado.`);
+    } catch {
+      setError('Não consegui copiar automaticamente. Selecione o link e copie manualmente.');
+    }
+  }
 
   function updateForm(shopId: string, field: keyof ShopForm, value: string) {
     const nextValue = field === 'status' ? (value as SubscriptionStatus) : value;
@@ -289,6 +307,63 @@ export default function AdminMasterPage() {
         <div className="stat-card"><span>Ativas / teste</span><strong>{activeShops.length}</strong></div>
         <div className="stat-card"><span>Inadimplentes</span><strong>{overdueShops.length}</strong></div>
         <div className="stat-card"><span>Receita mensal prevista</span><strong>{formatCurrency(monthlyRevenue)}</strong></div>
+      </section>
+
+      <section className="panel">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Cadastro rápido</p>
+            <h2>Links para novos cadastros</h2>
+            <p className="small-text">
+              Copie e envie para novos clientes criarem a loja, ou para motoqueiros entrarem direto no cadastro da loja certa.
+            </p>
+          </div>
+          <LinkIcon size={26} />
+        </div>
+
+        <div className="share-link-grid">
+          <div className="share-link-card">
+            <h3>Novo cliente / lojista</h3>
+            <p className="small-text">Esse link cria a conta do lojista e a loja em teste grátis.</p>
+            <div className="copy-row">
+              <input className="input" readOnly value={lojistaSignupUrl} />
+              <button className="button secondary" type="button" onClick={() => copyLink('Link de cliente', lojistaSignupUrl)}>
+                <Copy size={16} /> Copiar
+              </button>
+              <a className="icon-button" href={lojistaSignupUrl} target="_blank" rel="noreferrer">
+                <ExternalLink size={16} /> Abrir
+              </a>
+            </div>
+          </div>
+
+          <div className="share-link-card">
+            <h3>Motoqueiros por loja</h3>
+            <p className="small-text">Cada loja tem um link próprio para o motoqueiro se cadastrar e conectar o Telegram.</p>
+            <div className="share-link-list">
+              {shops.length === 0 && <p className="small-text">Nenhuma loja cadastrada ainda.</p>}
+              {shops.map((shop) => {
+                const riderUrl = makeShopRegistrationUrl(shop, publicOrigin);
+                return (
+                  <div className="share-link-item" key={shop.id}>
+                    <div>
+                      <strong>{shop.name}</strong>
+                      <p className="small-text">Cadastro rápido do motoqueiro vinculado a esta loja.</p>
+                    </div>
+                    <div className="copy-row">
+                      <input className="input" readOnly value={riderUrl} />
+                      <button className="button secondary" type="button" onClick={() => copyLink(`Link de motoqueiro de ${shop.name}`, riderUrl)}>
+                        <Copy size={16} /> Copiar
+                      </button>
+                      <a className="icon-button" href={riderUrl} target="_blank" rel="noreferrer">
+                        <ExternalLink size={16} /> Abrir
+                      </a>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="panel">
