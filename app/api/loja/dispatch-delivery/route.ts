@@ -64,15 +64,23 @@ async function sendDispatchTelegram(delivery: DeliveryForDispatch) {
 
   const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? ''}/motoqueiro/dashboard`;
   const body = [
-    'Pedido despachado pela loja.',
+    'PEDIDO DESPACHADO',
     '',
     `Loja: ${shop?.name ?? 'Loja'}`,
-    shop?.address ? `Origem: ${shop.address}${shop.city ? `, ${shop.city}` : ''}` : null,
-    `Destino: ${delivery.destination_address}`,
+    '',
+    shop?.address ? ['Retirada:', `${shop.address}${shop.city ? `, ${shop.city}` : ''}`].join('\n') : null,
+    '',
+    'Destino:',
+    delivery.destination_address,
+    '',
     delivery.customer_name ? `Cliente: ${delivery.customer_name}` : null,
     delivery.customer_phone ? `Telefone: ${delivery.customer_phone}` : null,
     '',
-    'Siga para o destino. Quando estiver perto, o sistema libera ENTREGUE.',
+    'Proximo passo:',
+    'Siga para o destino.',
+    'Quando estiver perto, o sistema libera ENTREGUE.',
+    '',
+    'Painel do motoqueiro:',
     dashboardUrl || null,
   ].filter(Boolean).join('\n');
 

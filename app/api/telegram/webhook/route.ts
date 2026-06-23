@@ -128,18 +128,53 @@ function riderIdFromStartPayload(payload?: string | null) {
 
 function buildReplyText(result: DriverCommandResult, fallbackMessage?: string | null) {
   if (result.ok) {
-    if (result.command === 'available') return 'Disponibilidade confirmada. Voce esta online no sistema.';
-    if (result.command === 'accept') return 'Corrida aceita. Aguarde a loja despachar o pedido. Quando estiver perto do destino, o sistema libera ENTREGUE.';
-    if (result.command === 'reject') return 'Corrida recusada. Vamos chamar o proximo motoqueiro disponivel.';
+    if (result.command === 'available') {
+      return [
+        'DISPONIBILIDADE CONFIRMADA',
+        '',
+        'Voce esta online no sistema.',
+        'Quando houver corrida, ela aparece aqui no Telegram.',
+      ].join('\n');
+    }
+    if (result.command === 'accept') {
+      return [
+        'CORRIDA ACEITA',
+        '',
+        'Aguarde a loja despachar o pedido.',
+        '',
+        'Proximo passo:',
+        'Quando a loja despachar, voce recebera os dados finais da entrega.',
+      ].join('\n');
+    }
+    if (result.command === 'reject') {
+      return [
+        'CORRIDA RECUSADA',
+        '',
+        'Tudo certo. Vamos chamar o proximo motoqueiro disponivel.',
+      ].join('\n');
+    }
     if (result.command === 'departed') return 'A saida agora deve ser registrada pela loja.';
     if (result.command === 'arrived') return 'A chegada agora e liberada automaticamente pelo mapa.';
-    if (result.command === 'delivered') return 'Entrega finalizada. Voce ficou disponivel para novas corridas.';
+    if (result.command === 'delivered') {
+      return [
+        'ENTREGA FINALIZADA',
+        '',
+        'Voce ficou disponivel para novas corridas.',
+      ].join('\n');
+    }
     if (result.command === 'summary') return result.message ?? 'Resumo enviado.';
   }
 
   return result.message
-    ? `Nao consegui concluir: ${result.message}`
-    : `Mensagem recebida: ${fallbackMessage ?? 'sem texto'}. Comandos validos: DISPONIVEL, ACEITAR, RECUSAR e ENTREGUE.`;
+    ? ['NAO CONSEGUI CONCLUIR', '', result.message].join('\n')
+    : [
+        'MENSAGEM RECEBIDA',
+        '',
+        fallbackMessage ?? 'sem texto',
+        '',
+        'Comandos validos:',
+        'DISPONIVEL, ACEITAR, RECUSAR e ENTREGUE.',
+      ].join('\n');
 }
 
 function saoPauloTodayRange() {
@@ -209,20 +244,34 @@ async function sendDailyDriverSummary(chatId: string) {
 
   const lastRows = rows.slice(0, 5).map((delivery, index) => {
     const shop = Array.isArray(delivery.shops) ? delivery.shops[0] : delivery.shops;
-    return `${index + 1}. ${shop?.name ?? 'Loja'} - ${delivery.status} - ${delivery.destination_address ?? '-'}`;
+    const statusLabel = delivery.status === 'delivered'
+      ? 'Entregue'
+      : delivery.status === 'rejected'
+        ? 'Recusada'
+        : ['assigned', 'accepted', 'out_for_delivery'].includes(delivery.status)
+          ? 'Em andamento'
+          : delivery.status;
+    return [
+      `${index + 1}. ${shop?.name ?? 'Loja'} - ${statusLabel}`,
+      `   ${delivery.destination_address ?? '-'}`,
+    ].join('\n');
   });
 
   await sendTelegramText(
     chatId,
     [
-      `Resumo do dia (${range.dateKey})`,
+      'RESUMO DO DIA',
+      range.dateKey,
+      '',
       `Motoqueiro: ${rider.name ?? '-'}`,
+      '',
       `Chamadas: ${rows.length}`,
       `Entregues: ${delivered.length}`,
       `Em andamento: ${running.length}`,
       `Recusadas: ${rejected.length}`,
       `Ganhos estimados: ${formatCurrency(payout)}`,
-      lastRows.length ? `\nUltimas corridas:\n${lastRows.join('\n')}` : '\nNenhuma corrida registrada hoje.',
+      '',
+      lastRows.length ? `Ultimas corridas:\n${lastRows.join('\n\n')}` : 'Nenhuma corrida registrada hoje.',
     ].join('\n')
   );
 }
@@ -272,12 +321,18 @@ function buildDeliveryCallText(delivery: DeliveryForTelegram) {
 
   return telegramText(
     [
-      'Nova corrida disponivel.',
+      'NOVA CORRIDA DISPONIVEL',
       '',
       `Loja: ${shopName}`,
-      `Destino: ${destination}`,
       '',
-      'Use os botoes abaixo ou abra o sistema:',
+      'Destino:',
+      destination,
+      '',
+      'Escolha uma opcao:',
+      '- Aceitar: pega a corrida',
+      '- Recusar: chama o proximo motoqueiro',
+      '',
+      'Painel do motoqueiro:',
       dashboardUrl,
     ].join('\n')
   );
@@ -404,7 +459,17 @@ async function linkRiderFromStart(payload: TelegramWebhookPayload) {
     return true;
   }
 
-  await sendTelegramText(String(chatId), 'Telegram conectado ao sistema de entregas. Quando chegar na loja, responda DISPONIVEL.');
+  await sendTelegramText(
+    String(chatId),
+    [
+      'TELEGRAM CONECTADO',
+      '',
+      'Seu cadastro foi vinculado ao sistema de entregas.',
+      '',
+      'Quando chegar na loja, responda:',
+      'DISPONIVEL',
+    ].join('\n')
+  );
   return true;
 }
 
@@ -443,8 +508,18 @@ async function processDriverCommand(payload: TelegramWebhookPayload) {
     await sendTelegramText(
       String(chatId),
       command === 'departed'
-        ? 'A saida para entrega agora e despachada pela loja. Aguarde o pedido sair no sistema.'
-        : 'A chegada agora e detectada automaticamente pelo mapa. Quando estiver perto do destino, o bot libera ENTREGUE.'
+        ? [
+            'AGUARDE A LOJA',
+            '',
+            'A saida para entrega agora e despachada pela loja.',
+            'Assim que o pedido sair, voce recebe a orientacao aqui.',
+          ].join('\n')
+        : [
+            'CHEGADA AUTOMATICA',
+            '',
+            'A chegada agora e detectada pelo mapa.',
+            'Quando estiver perto do destino, o sistema libera ENTREGUE.',
+          ].join('\n')
     );
     return;
   }

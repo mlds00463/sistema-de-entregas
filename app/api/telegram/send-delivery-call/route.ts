@@ -34,12 +34,18 @@ function buildTelegramMessage(delivery: DeliveryForTelegram, dashboardUrl: strin
 
   return telegramText(
     [
-      'Nova corrida disponivel.',
+      'NOVA CORRIDA DISPONIVEL',
       '',
       `Loja: ${shopName}`,
-      `Destino: ${destination}`,
       '',
-      'Use os botoes abaixo ou abra o sistema:',
+      'Destino:',
+      destination,
+      '',
+      'Escolha uma opcao:',
+      '- Aceitar: pega a corrida',
+      '- Recusar: chama o proximo motoqueiro',
+      '',
+      'Painel do motoqueiro:',
       dashboardUrl,
     ].join('\n')
   );

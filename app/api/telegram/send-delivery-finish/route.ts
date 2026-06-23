@@ -40,10 +40,14 @@ async function sendFinishMessage(input: {
     body: JSON.stringify({
       chat_id: input.chatId,
       text: telegramText([
-        'Chegada detectada no destino.',
-        `Destino: ${input.destinationAddress}`,
+        'ENTREGUE LIBERADO',
         '',
-        'Agora voce pode finalizar esta corrida.',
+        'Chegada detectada perto do destino.',
+        '',
+        'Destino:',
+        input.destinationAddress,
+        '',
+        'Agora voce pode finalizar esta corrida pelo botao abaixo.',
       ].join('\n')),
       disable_web_page_preview: true,
       reply_markup: {

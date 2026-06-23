@@ -1,5 +1,10 @@
 export function telegramText(value: string, maxLength = 3900) {
-  const normalized = value.replace(/\s+/g, ' ').trim();
+  const normalized = value
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
 }
 
