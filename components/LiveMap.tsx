@@ -24,6 +24,17 @@ function toCoordinate(latitude: number | null | undefined, longitude: number | n
   return [latitude, longitude];
 }
 
+function coordinateKey(position: Coordinate) {
+  return `${position[0].toFixed(6)},${position[1].toFixed(6)}`;
+}
+
+function appendUniqueCoordinate(target: Coordinate[], position: Coordinate | null) {
+  if (!position) return;
+  const last = target[target.length - 1];
+  if (last && coordinateKey(last) === coordinateKey(position)) return;
+  target.push(position);
+}
+
 function createMarker(className: string, label: string) {
   return L.divIcon({
     className: `map-marker ${className}`,
@@ -173,19 +184,16 @@ export default function LiveMap({
     [locationPoints]
   );
   const traveledPositions = useMemo(() => {
-    if (trackedPositions.length > 1) return trackedPositions;
-    if (
-      selectedDelivery
-      && ['accepted', 'out_for_delivery', 'delivered'].includes(selectedDelivery.status)
-      && selectedShopPosition
-      && selectedDeliveryDriverPosition
-    ) {
-      return [
-        selectedShopPosition,
-        selectedDeliveryDriverPosition,
-      ];
+    if (!selectedDelivery || !['accepted', 'out_for_delivery', 'delivered'].includes(selectedDelivery.status)) {
+      return trackedPositions;
     }
 
+    const positions: Coordinate[] = [];
+    appendUniqueCoordinate(positions, selectedShopPosition);
+    trackedPositions.forEach((position) => appendUniqueCoordinate(positions, position));
+    appendUniqueCoordinate(positions, selectedDeliveryDriverPosition);
+
+    if (positions.length > 1) return positions;
     return trackedPositions;
   }, [selectedDelivery, selectedDeliveryDriverPosition, selectedShopPosition, trackedPositions]);
 
@@ -235,7 +243,7 @@ export default function LiveMap({
 
     getDriverLocationPointsForPeriod(
       selectedDelivery.motorcyclist_id,
-      selectedDelivery.accepted_at ?? selectedDelivery.assigned_at ?? selectedDelivery.created_at,
+      selectedDelivery.departed_at ?? selectedDelivery.accepted_at ?? selectedDelivery.assigned_at ?? selectedDelivery.created_at,
       selectedDelivery.delivered_at,
       selectedDelivery.id
     ).then(({ data }) => {
@@ -246,7 +254,19 @@ export default function LiveMap({
     return () => {
       active = false;
     };
-  }, [selectedDelivery?.id, selectedDelivery?.motorcyclist_id, selectedDelivery?.accepted_at, selectedDelivery?.assigned_at, selectedDelivery?.created_at, selectedDelivery?.delivered_at]);
+  }, [
+    selectedDelivery?.id,
+    selectedDelivery?.motorcyclist_id,
+    selectedDelivery?.departed_at,
+    selectedDelivery?.accepted_at,
+    selectedDelivery?.assigned_at,
+    selectedDelivery?.created_at,
+    selectedDelivery?.delivered_at,
+    selectedDelivery?.updated_at,
+    selectedDeliveryDriver?.latitude,
+    selectedDeliveryDriver?.longitude,
+    selectedDeliveryDriver?.last_seen,
+  ]);
 
   useEffect(() => {
     let active = true;
