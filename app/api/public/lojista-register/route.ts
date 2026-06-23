@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
     user_metadata: {
       name: ownerName,
       phone,
-      role: 'lojista',
+      role: 'loja',
       public_register: true,
     },
   });
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
     .from('profiles')
     .insert({
       user_id: userData.user.id,
-      role: 'lojista',
+      role: 'loja',
       name: ownerName,
       phone,
     })
