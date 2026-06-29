@@ -119,8 +119,8 @@ export async function POST(request: NextRequest) {
   const delivery = data as unknown as DeliveryForTelegram;
   const driver = firstRelated(delivery.motorcyclists);
 
-  if (delivery.status !== 'out_for_delivery' || !delivery.arrival_notified_at) {
-    return jsonError('A entrega ainda não está liberada para finalizar.', 422);
+  if (delivery.status !== 'out_for_delivery') {
+    return jsonError('A entrega ainda não está em rota.', 422);
   }
 
   if (!driver?.telegram_chat_id) {

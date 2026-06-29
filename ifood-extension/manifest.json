@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Sistemas Pi iFood -> Motoqueiros",
+  "version": "0.2.5",
+  "description": "Captura pedidos visiveis do Gestor iFood e envia para http://localhost:3001/loja/dashboard.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://portal.ifood.com.br/*",
+    "https://*.ifood.com.br/*",
+    "http://localhost:3001/*",
+    "https://sistemas-pi.vercel.app/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://portal.ifood.com.br/*", "https://*.ifood.com.br/*"],
+      "js": ["config.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

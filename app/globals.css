@@ -398,6 +398,45 @@ p {
   margin-bottom: 18px;
 }
 
+.ifood-orders-panel {
+  border-color: #b8dafb;
+  background: #f8fbff;
+}
+
+.ifood-order-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ifood-order-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid #dfe5ec;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.ifood-order-card p {
+  margin: 4px 0;
+  color: #2d3848;
+  font-weight: 800;
+}
+
+.ifood-order-card span {
+  color: #5b6675;
+  line-height: 1.4;
+}
+
+.ifood-order-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .onboarding-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1139,6 +1178,8 @@ p {
   .delivery-card,
   .dispatch-card,
   .dispatch-panel-header,
+  .ifood-order-card,
+  .ifood-order-actions,
   .history-row,
   .incoming-ride-banner,
   .qr-box {

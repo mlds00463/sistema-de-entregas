@@ -14,6 +14,8 @@ import { notifyDeliveryReadyToFinishByTelegram } from '@/services/telegramServic
 
 const arrivalRadiusMeters = 120;
 const manualDeliveryFallbackMinutes = 5;
+const trackingHeartbeatMs = 15000;
+const minLocationSendIntervalMs = 8000;
 
 export default function DriverDashboardPage() {
   const { requestOnce, startWatching, stopWatching, watching, error: geoError } = useGeolocation();
@@ -27,6 +29,11 @@ export default function DriverDashboardPage() {
   const announcedDeliveryIdRef = useRef<string | null>(null);
   const firstDeliveryLoadDoneRef = useRef(false);
   const alertLoopRef = useRef<number | null>(null);
+  const trackingHeartbeatRef = useRef<number | null>(null);
+  const trackingEnabledRef = useRef(false);
+  const latestCoordsRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const lastLocationSentAtRef = useRef(0);
+  const locationSendInFlightRef = useRef(false);
   const deliveriesRef = useRef<Delivery[]>([]);
   const arrivalNotifiedRef = useRef<Set<string>>(new Set());
 
@@ -170,17 +177,80 @@ export default function DriverDashboardPage() {
     }
   }
 
+  async function sendDriverLocation(
+    coordinates: { latitude: number; longitude: number },
+    options: { force?: boolean } = {}
+  ) {
+    latestCoordsRef.current = coordinates;
+
+    const now = Date.now();
+    if (!options.force && now - lastLocationSentAtRef.current < minLocationSendIntervalMs) return;
+    if (locationSendInFlightRef.current) return;
+
+    locationSendInFlightRef.current = true;
+
+    try {
+      const { data } = await updateDriverLocation(coordinates.latitude, coordinates.longitude);
+      lastLocationSentAtRef.current = Date.now();
+      if (data) setDriver(data);
+      await checkDeliveryArrivals(coordinates.latitude, coordinates.longitude);
+    } catch {
+      // The next watch/heartbeat tick will try again. Keeping this silent avoids blocking the driver flow.
+    } finally {
+      locationSendInFlightRef.current = false;
+    }
+  }
+
+  function startLocationHeartbeat() {
+    if (trackingHeartbeatRef.current !== null) return;
+
+    trackingHeartbeatRef.current = window.setInterval(async () => {
+      if (!trackingEnabledRef.current) return;
+
+      try {
+        const coords = await requestOnce();
+        await sendDriverLocation(coords, { force: true });
+      } catch {
+        const last = latestCoordsRef.current;
+        if (last) await sendDriverLocation(last, { force: true });
+      }
+    }, trackingHeartbeatMs);
+  }
+
+  function stopLocationHeartbeat() {
+    if (trackingHeartbeatRef.current !== null) {
+      window.clearInterval(trackingHeartbeatRef.current);
+      trackingHeartbeatRef.current = null;
+    }
+  }
+
+  async function refreshLocationNow() {
+    if (!trackingEnabledRef.current) return;
+
+    try {
+      const coords = await requestOnce();
+      await sendDriverLocation(coords, { force: true });
+    } catch {
+      // If the browser cannot read GPS at this exact moment, the active watcher/heartbeat remains running.
+    }
+  }
+
   function startLiveTracking() {
     if (driver?.active === false) return;
+    trackingEnabledRef.current = true;
+    startLocationHeartbeat();
 
     startWatching((nextCoords) => {
-      updateDriverLocation(nextCoords.latitude, nextCoords.longitude)
-        .then(({ data }) => {
-          if (data) setDriver(data);
-        })
-        .catch(() => null);
-      checkDeliveryArrivals(nextCoords.latitude, nextCoords.longitude);
+      sendDriverLocation(nextCoords).catch(() => null);
     });
+
+    refreshLocationNow();
+  }
+
+  function stopLiveTracking() {
+    trackingEnabledRef.current = false;
+    stopLocationHeartbeat();
+    stopWatching();
   }
 
   useEffect(() => {
@@ -197,6 +267,39 @@ export default function DriverDashboardPage() {
       })
       .catch(() => null);
   }, [driver?.id, driver?.is_online, driver?.active, watching, activeDeliveries.length]);
+
+  useEffect(() => {
+    if (!driver || driver.active === false) return;
+    const shouldTrack = driver.is_online || activeDeliveries.length > 0;
+    if (!shouldTrack) {
+      stopLiveTracking();
+      return;
+    }
+
+    trackingEnabledRef.current = true;
+    startLocationHeartbeat();
+
+    const resumeTracking = () => {
+      if (document.visibilityState === 'visible') {
+        startLiveTracking();
+        refreshLocationNow();
+      }
+    };
+
+    window.addEventListener('focus', resumeTracking);
+    document.addEventListener('visibilitychange', resumeTracking);
+
+    return () => {
+      window.removeEventListener('focus', resumeTracking);
+      document.removeEventListener('visibilitychange', resumeTracking);
+    };
+  }, [driver?.id, driver?.is_online, driver?.active, activeDeliveries.length]);
+
+  useEffect(() => {
+    return () => {
+      stopLocationHeartbeat();
+    };
+  }, []);
 
   function playIncomingRideAlert() {
     if (!audioContextRef.current) return;
@@ -311,7 +414,7 @@ export default function DriverDashboardPage() {
       if (online) {
         startLiveTracking();
       } else {
-        stopWatching();
+        stopLiveTracking();
       }
       setMessage(online ? 'Você está online.' : 'Você saiu da fila.');
     } catch (error) {

@@ -11,9 +11,8 @@ export function jsonError(message: string, status = 400) {
 export async function getRouteContext(request: NextRequest) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const admin = createSupabaseAdmin();
 
-  if (!supabaseUrl || !supabaseAnonKey || !admin) {
+  if (!supabaseUrl || !supabaseAnonKey) {
     return { error: jsonError('Servidor sem configuração completa do Supabase.', 500) };
   }
 
@@ -28,6 +27,7 @@ export async function getRouteContext(request: NextRequest) {
     global: { headers: { Authorization: `Bearer ${userToken}` } },
     auth: { persistSession: false, autoRefreshToken: false },
   });
+  const admin = createSupabaseAdmin() ?? supabase;
 
   const { data: userData, error: userError } = await supabase.auth.getUser(userToken);
   if (userError || !userData.user) {

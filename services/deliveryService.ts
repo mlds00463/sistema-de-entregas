@@ -172,10 +172,27 @@ export async function markDeliveredFromShop(deliveryId: string) {
     };
   }
 
+  await notifyDeliveryComplete(deliveryId, 'shop');
+
   return {
     data: payload?.delivery ?? null,
     error: null,
   };
+}
+
+async function notifyDeliveryComplete(deliveryId: string, source: 'shop' | 'driver') {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) return;
+
+  await fetch('/api/telegram/send-delivery-complete', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ deliveryId, source }),
+  }).catch(() => null);
 }
 
 export async function updateDeliveryAddress(input: {
@@ -275,7 +292,9 @@ export async function markDeparted(deliveryId: string) {
 }
 
 export async function markDelivered(deliveryId: string) {
-  return supabase.rpc('mark_delivery_delivered', { delivery_id_input: deliveryId });
+  const result = await supabase.rpc('mark_delivery_delivered', { delivery_id_input: deliveryId });
+  if (!result.error) await notifyDeliveryComplete(deliveryId, 'driver');
+  return result;
 }
 
 export async function markArrived(deliveryId: string) {

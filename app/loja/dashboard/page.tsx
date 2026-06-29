@@ -1,7 +1,7 @@
 'use client';
 
 import { Bike, CheckCircle2, Clock3, DollarSign, PackageCheck, Pencil, RefreshCw, Save, Send, Timer, UserCheck, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DeliveryTable from '@/components/DeliveryTable';
 import ProtectedPage from '@/components/ProtectedPage';
 import StatusBadge from '@/components/StatusBadge';
@@ -74,6 +74,222 @@ function buildShopOriginAddress(shop: Shop) {
   ].filter(Boolean).join(', ');
 }
 
+type IfoodImportPayload = {
+  importId?: string;
+  orderId?: string;
+  rawText?: string;
+  customerName?: string;
+  customerPhone?: string;
+  destinationZipcode?: string;
+  destinationAddress?: string;
+  destinationNumber?: string;
+  destinationComplement?: string;
+  destinationNeighborhood?: string;
+  destinationCity?: string;
+  destinationState?: string;
+};
+
+type PreparedIfoodOrder = Required<Pick<IfoodImportPayload, 'importId'>> & IfoodImportPayload;
+
+function cleanImportValue(value?: string | null) {
+  return (value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function getLineAfterLabel(lines: string[], labels: string[]) {
+  const normalizedLabels = labels.map((label) => normalizeImportText(label));
+
+  for (const [index, line] of lines.entries()) {
+    const normalizedLine = normalizeImportText(line);
+    const label = normalizedLabels.find((item) => normalizedLine.includes(item));
+    if (!label) continue;
+
+    const inlineValue = line.split(/[:•]/).slice(1).join(' ').trim();
+    if (inlineValue.length > 2) return inlineValue;
+
+    for (let cursor = index + 1; cursor < Math.min(lines.length, index + 6); cursor += 1) {
+      const candidate = cleanImportValue(lines[cursor]);
+      if (candidate.length > 2) return candidate;
+    }
+  }
+
+  return '';
+}
+
+function normalizeImportText(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function splitImportedAddress(address: string): Partial<IfoodImportPayload> {
+  const cleanAddress = sanitizeImportedAddress(address);
+  if (!cleanAddress) return {};
+
+  const zipcode = cleanAddress.match(/\b\d{5}-?\d{3}\b/)?.[0] ?? '';
+  const withoutZipcode = cleanAddress
+    .replace(/\bCEP\s*/i, '')
+    .replace(/\b\d{5}-?\d{3}\b/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/,\s*,/g, ',')
+    .trim();
+
+  const pieces = withoutZipcode.split(',').map(cleanImportValue).filter(Boolean);
+  let street = pieces[0] ?? withoutZipcode;
+  let number = '';
+  let complement = '';
+  let neighborhood = '';
+  let city = '';
+  let state = '';
+
+  const numberPiece = pieces[1] ?? '';
+  const numberMatch = numberPiece.match(/^(\d+[A-Za-z]?)\b\s*-?\s*(.*)$/);
+  if (numberMatch) {
+    number = numberMatch[1];
+    neighborhood = cleanImportValue(numberMatch[2]);
+  } else {
+    const inlineNumber = street.match(/^(.+?)\s*,?\s+(\d+[A-Za-z]?)\b(.*)$/);
+    if (inlineNumber) {
+      street = cleanImportValue(inlineNumber[1]);
+      number = inlineNumber[2];
+      neighborhood = cleanImportValue(inlineNumber[3].replace(/^[-,]/, ''));
+    }
+  }
+
+  for (const piece of pieces.slice(2)) {
+    const cityState = piece.match(/^(.+?)\s*[-/]\s*([A-Z]{2})$/i);
+    if (cityState) {
+      city = cleanImportValue(cityState[1]);
+      state = cityState[2].toUpperCase();
+      continue;
+    }
+
+    if (!neighborhood) {
+      neighborhood = piece;
+    } else if (!complement) {
+      complement = piece;
+    }
+  }
+
+  return {
+    destinationZipcode: zipcode,
+    destinationAddress: street,
+    destinationNumber: number,
+    destinationComplement: complement,
+    destinationNeighborhood: neighborhood,
+    destinationCity: city,
+    destinationState: state,
+  };
+}
+
+function sanitizeImportedAddress(value?: string | null) {
+  return cleanImportValue(value)
+    .replace(/\bLocalizador\b.*$/i, '')
+    .replace(/\b(?:ID|Telefone|Entrega prevista)\s*:?.*$/i, '')
+    .replace(/\bvia iFood\b.*$/i, '')
+    .replace(/\biFood\s*#[A-Za-zÀ-ÿ0-9_-]+/gi, '')
+    .replace(/\s*•\s*/g, ', ')
+    .replace(/\s+-\s+/g, ', ')
+    .replace(/,\s*,/g, ',')
+    .replace(/[,\s]+$/g, '')
+    .trim();
+}
+
+function cleanImportedZipcode(value?: string | null, rawText = '') {
+  const digits = cleanImportValue(value).replace(/\D/g, '');
+  if (digits.length !== 8) return '';
+  if (new RegExp(`(?:localizador|id)\\D{0,12}${digits}`, 'i').test(rawText)) return '';
+  if (digits.startsWith('7687')) return '';
+  return digits;
+}
+
+function parseIfoodText(rawText: string): IfoodImportPayload {
+  const text = cleanImportValue(rawText);
+  const lines = rawText.split(/\n+/).map(cleanImportValue).filter(Boolean);
+  const possibleAddress = getLineAfterLabel(lines, [
+    'endereço de entrega',
+    'endereco de entrega',
+    'entrega em',
+    'endereço',
+    'endereco',
+  ]) || lines.find((line) => /\b(rua|avenida|av\.|r\.|praça|praca|alameda|travessa|rodovia)\b/i.test(line)) || '';
+
+  const addressParts = splitImportedAddress(possibleAddress);
+
+  return {
+    rawText,
+    orderId: text.match(/(?:pedido\s*)?#?\s*(\d{3,6})/i)?.[1] ?? lines.find((line) => /^\d{3,6}$/.test(line)) ?? '',
+    customerName: getLineAfterLabel(lines, ['cliente', 'nome do cliente', 'consumidor']),
+    customerPhone: text.match(/(?:\(?\d{2}\)?\s*)?(?:9\s*)?\d{4}[-\s]?\d{4}/)?.[0] ?? '',
+    destinationZipcode: addressParts.destinationZipcode || text.match(/\b\d{5}-?\d{3}\b/)?.[0] || '',
+    destinationAddress: addressParts.destinationAddress || possibleAddress,
+    destinationNumber: addressParts.destinationNumber || '',
+    destinationComplement: addressParts.destinationComplement || '',
+    destinationNeighborhood: addressParts.destinationNeighborhood || '',
+    destinationCity: addressParts.destinationCity || '',
+    destinationState: addressParts.destinationState || '',
+  };
+}
+
+function makeImportId(payload: IfoodImportPayload, index = 0) {
+  return cleanImportValue(payload.orderId) || `${Date.now()}-${index}`;
+}
+
+function parseIfoodOrdersParam(value: string | null): PreparedIfoodOrder[] {
+  if (!value) return [];
+
+  try {
+    const parsed = JSON.parse(value) as IfoodImportPayload[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((item, index) => ({
+      ...item,
+      importId: makeImportId(item, index),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function parseIfoodImportParam(value: string | null): PreparedIfoodOrder[] {
+  if (!value || typeof window === 'undefined') return [];
+
+  try {
+    const json = decodeURIComponent(escape(window.atob(value)));
+    const parsed = JSON.parse(json) as IfoodImportPayload[] | { orders?: IfoodImportPayload[] };
+    const orders = Array.isArray(parsed) ? parsed : parsed.orders;
+    if (!Array.isArray(orders)) return [];
+
+    return orders.map((item, index) => ({
+      ...item,
+      importId: makeImportId(item, index),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function normalizeIfoodOrder(payload: IfoodImportPayload) {
+  const sanitizedAddress = sanitizeImportedAddress(payload.destinationAddress ?? '');
+  const addressParts = splitImportedAddress(sanitizedAddress);
+  const cleanZipcode = cleanImportedZipcode(addressParts.destinationZipcode || payload.destinationZipcode, payload.rawText ?? '');
+  const complementParts = [
+    payload.destinationComplement || addressParts.destinationComplement,
+  ].filter(Boolean);
+
+  return {
+    destinationZipcode: cleanZipcode,
+    destinationAddress: cleanImportValue(addressParts.destinationAddress || sanitizedAddress),
+    destinationNumber: cleanImportValue(payload.destinationNumber || addressParts.destinationNumber || ''),
+    destinationComplement: complementParts.join(' - '),
+    destinationNeighborhood: cleanImportValue(payload.destinationNeighborhood || addressParts.destinationNeighborhood),
+    destinationCity: cleanImportValue(payload.destinationCity || addressParts.destinationCity),
+    destinationState: cleanImportValue(payload.destinationState || addressParts.destinationState).toUpperCase().slice(0, 2),
+    customerName: cleanImportValue(payload.customerName),
+    customerPhone: cleanImportValue(payload.customerPhone),
+  };
+}
+
 export default function ShopDashboardPage() {
   const { profile } = useProfile();
   const [shops, setShops] = useState<Shop[]>([]);
@@ -106,6 +322,10 @@ export default function ShopDashboardPage() {
   const [editForm, setEditForm] = useState(emptyEditForm);
   const [editCepLoading, setEditCepLoading] = useState(false);
   const [savingEditDeliveryId, setSavingEditDeliveryId] = useState<string | null>(null);
+  const [importedIfoodOrders, setImportedIfoodOrders] = useState<PreparedIfoodOrder[]>([]);
+  const [importedIfoodAssignments, setImportedIfoodAssignments] = useState<Record<string, string>>({});
+  const [creatingIfoodOrderId, setCreatingIfoodOrderId] = useState<string | null>(null);
+  const lastIfoodImportKeyRef = useRef('');
 
   const loadShops = useCallback(async () => {
     const { data } = await getShops();
@@ -142,6 +362,76 @@ export default function ShopDashboardPage() {
   useEffect(() => {
     loadDeliveries();
   }, [loadDeliveries]);
+
+  const readIfoodImportFromUrl = useCallback(() => {
+    const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : '';
+    const params = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(hash);
+    const importKey = `${window.location.search}|${window.location.hash}`;
+    const encodedImport = params.get('ifoodImport') || hashParams.get('ifoodImport');
+    const encodedBatch = params.get('ifoodOrders') || hashParams.get('ifoodOrders');
+    const isSingleImport = (params.get('ifood') || hashParams.get('ifood')) === '1';
+    const hasImportPayload = Boolean(encodedImport || encodedBatch || isSingleImport);
+
+    if (!hasImportPayload || lastIfoodImportKeyRef.current === importKey) return false;
+
+    lastIfoodImportKeyRef.current = importKey;
+
+    const batch = parseIfoodImportParam(encodedImport);
+    const legacyBatch = batch.length ? batch : parseIfoodOrdersParam(encodedBatch);
+
+    if (legacyBatch.length) {
+      const [firstOrder, ...remainingOrders] = legacyBatch;
+      applyIfoodImport(firstOrder);
+      setImportedIfoodOrders(remainingOrders);
+      setImportedIfoodAssignments({});
+      setMessage(remainingOrders.length
+        ? `${legacyBatch.length} pedido(s) do iFood importado(s). O primeiro foi carregado no formulário; selecione outro abaixo para carregar.`
+        : 'Pedido do iFood carregado no formulário. Confira os dados e clique em Chamar motoqueiro.');
+      window.history.replaceState({}, '', window.location.pathname);
+      return true;
+    }
+
+    if (!isSingleImport) {
+      setMessage('Recebi uma chamada do iFood, mas não consegui ler os dados do pedido. Use Diagnóstico na extensão e tente Enviar lista.');
+      window.history.replaceState({}, '', window.location.pathname);
+      return true;
+    }
+
+    const rawText = params.get('rawText') || hashParams.get('rawText') || '';
+    const parsedPayload = parseIfoodText(rawText);
+    const payload = {
+      ...parsedPayload,
+      orderId: params.get('orderId') || hashParams.get('orderId') || parsedPayload.orderId,
+      customerName: params.get('customerName') || hashParams.get('customerName') || parsedPayload.customerName,
+      customerPhone: params.get('customerPhone') || hashParams.get('customerPhone') || parsedPayload.customerPhone,
+      destinationZipcode: params.get('destinationZipcode') || hashParams.get('destinationZipcode') || parsedPayload.destinationZipcode,
+      destinationAddress: params.get('destinationAddress') || hashParams.get('destinationAddress') || parsedPayload.destinationAddress,
+    };
+
+    const prepared = { ...payload, importId: makeImportId(payload) };
+    applyIfoodImport(prepared);
+    setImportedIfoodOrders([]);
+    setImportedIfoodAssignments({});
+    setMessage('Pedido do iFood carregado no formulário. Confira os dados e clique em Chamar motoqueiro.');
+
+    window.history.replaceState({}, '', window.location.pathname);
+    return true;
+  }, []);
+
+  useEffect(() => {
+    readIfoodImportFromUrl();
+    const onUrlMaybeChanged = () => readIfoodImportFromUrl();
+    window.addEventListener('focus', onUrlMaybeChanged);
+    window.addEventListener('popstate', onUrlMaybeChanged);
+    const interval = window.setInterval(onUrlMaybeChanged, 1000);
+
+    return () => {
+      window.removeEventListener('focus', onUrlMaybeChanged);
+      window.removeEventListener('popstate', onUrlMaybeChanged);
+      window.clearInterval(interval);
+    };
+  }, [readIfoodImportFromUrl]);
 
   useEffect(() => {
     if (!shopId) return;
@@ -263,21 +553,30 @@ export default function ShopDashboardPage() {
     return `${driver.name} - ${driver.available ? 'disponível' : 'ocupado'}`;
   }
 
-  async function handleCreate(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function createDeliveryFromPayload(input: {
+    assignedMotorcyclistId?: string;
+    destinationZipcode: string;
+    destinationAddress: string;
+    destinationNumber: string;
+    destinationComplement: string;
+    destinationNeighborhood: string;
+    destinationCity: string;
+    destinationState: string;
+    customerName: string;
+    customerPhone: string;
+  }) {
     setMessage(null);
 
     const fullDestination = [
-      destinationAddress,
-      destinationNumber,
-      destinationComplement,
-      destinationNeighborhood,
-      destinationCity,
-      destinationState,
-      destinationZipcode ? `CEP ${destinationZipcode}` : '',
+      input.destinationAddress,
+      input.destinationNumber,
+      input.destinationComplement,
+      input.destinationNeighborhood,
+      input.destinationCity,
+      input.destinationState,
+      input.destinationZipcode ? `CEP ${input.destinationZipcode}` : '',
     ].filter(Boolean).join(', ');
 
-    setCreatingDelivery(true);
     let destinationCoordinates: { latitude: number; longitude: number } | null = null;
 
     try {
@@ -288,25 +587,23 @@ export default function ShopDashboardPage() {
 
     const { data, error } = await createDelivery({
       shopId,
-      assignedMotorcyclistId,
+      assignedMotorcyclistId: input.assignedMotorcyclistId,
       originAddress,
       destinationAddress: fullDestination,
-      destinationZipcode,
-      destinationNumber,
-      destinationComplement,
-      destinationNeighborhood,
-      destinationCity,
-      destinationState,
+      destinationZipcode: input.destinationZipcode,
+      destinationNumber: input.destinationNumber,
+      destinationComplement: input.destinationComplement,
+      destinationNeighborhood: input.destinationNeighborhood,
+      destinationCity: input.destinationCity,
+      destinationState: input.destinationState,
       destinationLatitude: destinationCoordinates?.latitude ?? null,
       destinationLongitude: destinationCoordinates?.longitude ?? null,
-      customerName,
-      customerPhone,
+      customerName: input.customerName,
+      customerPhone: input.customerPhone,
     });
 
     if (error) {
-      setMessage(error.message);
-      setCreatingDelivery(false);
-      return;
+      return { error: error.message };
     }
 
     const baseMessage = data?.motorcyclist_id ? 'Entrega criada e motoqueiro chamado.' : 'Entrega criada, mas não há motoqueiro disponível agora.';
@@ -322,7 +619,35 @@ export default function ShopDashboardPage() {
         : ` Telegram não enviado: ${telegram.error}`;
     }
 
-    setMessage(`${baseMessage}${routeMessage}${telegramMessage}`);
+    return {
+      message: `${baseMessage}${routeMessage}${telegramMessage}`,
+    };
+  }
+
+  async function handleCreate(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCreatingDelivery(true);
+
+    const result = await createDeliveryFromPayload({
+      assignedMotorcyclistId,
+      destinationZipcode,
+      destinationAddress,
+      destinationNumber,
+      destinationComplement,
+      destinationNeighborhood,
+      destinationCity,
+      destinationState,
+      customerName,
+      customerPhone,
+    });
+
+    if (result.error) {
+      setMessage(result.error);
+      setCreatingDelivery(false);
+      return;
+    }
+
+    setMessage(result.message ?? 'Entrega criada.');
     setDestinationZipcode('');
     setDestinationAddress('');
     setDestinationNumber('');
@@ -334,6 +659,51 @@ export default function ShopDashboardPage() {
     setCustomerPhone('');
     setAssignedMotorcyclistId('');
     setCreatingDelivery(false);
+    loadDeliveries();
+    loadDrivers();
+  }
+
+  function applyIfoodImport(payload: IfoodImportPayload) {
+    const normalized = normalizeIfoodOrder(payload);
+    setDestinationZipcode(normalized.destinationZipcode);
+    setDestinationAddress(normalized.destinationAddress);
+    setDestinationNumber(normalized.destinationNumber);
+    setDestinationComplement(normalized.destinationComplement);
+    setDestinationNeighborhood(normalized.destinationNeighborhood);
+    setDestinationCity(normalized.destinationCity);
+    setDestinationState(normalized.destinationState);
+    setCustomerName(normalized.customerName);
+    setCustomerPhone(normalized.customerPhone);
+    setMessage('Pedido do iFood carregado no formulário. Confira os dados e clique em Chamar motoqueiro.');
+  }
+
+  async function handleCreateImportedIfoodOrder(order: PreparedIfoodOrder) {
+    if (!shopId) {
+      setMessage('Escolha uma loja antes de criar o pedido.');
+      return;
+    }
+
+    const normalized = normalizeIfoodOrder(order);
+    setCreatingIfoodOrderId(order.importId);
+    const result = await createDeliveryFromPayload({
+      ...normalized,
+      assignedMotorcyclistId: importedIfoodAssignments[order.importId] || '',
+    });
+
+    if (result.error) {
+      setMessage(result.error);
+      setCreatingIfoodOrderId(null);
+      return;
+    }
+
+    setImportedIfoodOrders((current) => current.filter((item) => item.importId !== order.importId));
+    setImportedIfoodAssignments((current) => {
+      const next = { ...current };
+      delete next[order.importId];
+      return next;
+    });
+    setMessage(result.message ?? 'Pedido iFood criado.');
+    setCreatingIfoodOrderId(null);
     loadDeliveries();
     loadDrivers();
   }
@@ -633,6 +1003,63 @@ export default function ShopDashboardPage() {
               <Save size={18} /> {savingEditDeliveryId === editingDelivery.id ? 'Salvando...' : 'Salvar endereço'}
             </button>
           </form>
+        </section>
+      )}
+
+      {importedIfoodOrders.length > 0 && (
+        <section className="panel ifood-orders-panel">
+          <div className="section-header">
+            <div>
+              <p className="eyebrow">iFood</p>
+              <h2>Pedidos importados</h2>
+              <p className="small-text">
+                Escolha qual pedido carregar no formulário de criação.
+              </p>
+            </div>
+            <button className="button secondary" type="button" onClick={() => {
+              setImportedIfoodOrders([]);
+              setImportedIfoodAssignments({});
+            }}>
+              Limpar lista
+            </button>
+          </div>
+
+          <div className="ifood-order-list">
+            {importedIfoodOrders.map((order) => {
+              const normalized = normalizeIfoodOrder(order);
+              const address = [
+                normalized.destinationAddress,
+                normalized.destinationNumber,
+                normalized.destinationComplement,
+                normalized.destinationNeighborhood,
+                normalized.destinationCity,
+                normalized.destinationState,
+                normalized.destinationZipcode ? `CEP ${normalized.destinationZipcode}` : '',
+              ].filter(Boolean).join(', ');
+
+              return (
+                <article className="ifood-order-card" key={order.importId}>
+                  <div>
+                    <strong>{order.orderId ? `iFood #${order.orderId}` : 'Pedido iFood'}</strong>
+                    <p>{normalized.customerName || 'Cliente não identificado'}</p>
+                    <span>{address || 'Endereço não identificado'}</span>
+                  </div>
+                  <div className="ifood-order-actions">
+                    <button
+                      className="button"
+                      type="button"
+                      onClick={() => {
+                        applyIfoodImport(order);
+                        setImportedIfoodOrders((current) => current.filter((item) => item.importId !== order.importId));
+                      }}
+                    >
+                      Carregar no formulário
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
         </section>
       )}
 

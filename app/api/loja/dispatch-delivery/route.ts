@@ -91,6 +91,11 @@ async function sendDispatchTelegram(delivery: DeliveryForDispatch) {
       chat_id: rider.telegram_chat_id,
       text: telegramText(body),
       disable_web_page_preview: true,
+      reply_markup: {
+        inline_keyboard: [[
+          { text: 'Entregue', callback_data: `delivery:delivered:${delivery.id}` },
+        ]],
+      },
     }),
   });
 
