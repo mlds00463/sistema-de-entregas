@@ -1,5 +1,6 @@
 window.MADALENA_IFOOD_CONFIG = {
-  targetUrl: 'http://localhost:3001/loja/dashboard',
+  targetUrl: 'https://sistemas-pi.vercel.app/loja/dashboard',
+  localUrl: 'http://localhost:3001/loja/dashboard',
   productionUrl: 'https://sistemas-pi.vercel.app/loja/dashboard',
   pollIntervalMs: 8000,
   selectors: {

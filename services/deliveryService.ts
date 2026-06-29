@@ -292,9 +292,40 @@ export async function markDeparted(deliveryId: string) {
 }
 
 export async function markDelivered(deliveryId: string) {
-  const result = await supabase.rpc('mark_delivery_delivered', { delivery_id_input: deliveryId });
-  if (!result.error) await notifyDeliveryComplete(deliveryId, 'driver');
-  return result;
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+
+  if (!token) {
+    return {
+      data: null,
+      error: { message: 'Sessão expirada. Entre novamente para finalizar a entrega.' },
+    };
+  }
+
+  const response = await fetch('/api/motoqueiro/mark-delivered', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ deliveryId }),
+  });
+
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    return {
+      data: null,
+      error: { message: payload?.error ?? 'Não foi possível finalizar a entrega.' },
+    };
+  }
+
+  await notifyDeliveryComplete(deliveryId, 'driver');
+
+  return {
+    data: payload?.delivery ?? null,
+    error: null,
+  };
 }
 
 export async function markArrived(deliveryId: string) {

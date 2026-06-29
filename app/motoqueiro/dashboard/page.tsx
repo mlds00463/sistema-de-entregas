@@ -434,54 +434,7 @@ export default function DriverDashboardPage() {
   }
 
   async function handleMarkDelivered(delivery: Delivery) {
-    let distance = getDistanceToDelivery(delivery);
-    const manualFallbackAllowed = canFinishAfterWait(delivery);
-
-    if (distance === null) {
-      try {
-        const coords = await requestOnce();
-        const { data } = await updateDriverLocation(coords.latitude, coords.longitude);
-        if (data) setDriver(data);
-        await checkDeliveryArrivals(coords.latitude, coords.longitude, [delivery]);
-
-        if (
-          delivery.destination_latitude !== null
-          && delivery.destination_latitude !== undefined
-          && delivery.destination_longitude !== null
-          && delivery.destination_longitude !== undefined
-        ) {
-          distance = distanceInMeters(
-            coords.latitude,
-            coords.longitude,
-            delivery.destination_latitude,
-            delivery.destination_longitude
-          );
-        }
-      } catch {
-        if (!manualFallbackAllowed) {
-          const availableAt = getManualFinishAvailableAt(delivery);
-          setMessage(`Não consegui ler seu GPS agora. Ative a localização ou aguarde até ${formatTimeOnly(availableAt)} para liberar Entregue.`);
-          return;
-        }
-      }
-    }
-
-    const canFinish = Boolean(delivery.arrival_notified_at)
-      || (distance !== null && distance <= arrivalRadiusMeters)
-      || manualFallbackAllowed;
-
-    if (!canFinish) {
-      const availableAt = getManualFinishAvailableAt(delivery);
-      setMessage(`Chegue perto do destino ou aguarde até ${formatTimeOnly(availableAt)} para liberar o botão Entregue.`);
-      return;
-    }
-
     await runDeliveryAction(async () => {
-      if (!delivery.arrival_notified_at && distance !== null && distance <= arrivalRadiusMeters) {
-        const arrival = await markArrived(delivery.id);
-        if (arrival.error) return { error: arrival.error };
-      }
-
       return markDelivered(delivery.id);
     });
   }
@@ -528,11 +481,6 @@ export default function DriverDashboardPage() {
             )}
             {activeDeliveries.map((delivery) => {
               const distance = getDistanceToDelivery(delivery);
-              const manualFinishAvailableAt = getManualFinishAvailableAt(delivery);
-              const manualFinishAllowed = canFinishAfterWait(delivery);
-              const canFinish = Boolean(delivery.arrival_notified_at)
-                || (distance !== null && distance <= arrivalRadiusMeters)
-                || manualFinishAllowed;
 
               return (
                 <div className="incoming-action-group" key={delivery.id}>
@@ -556,20 +504,13 @@ export default function DriverDashboardPage() {
                   )}
                   {delivery.status === 'out_for_delivery' && (
                     <>
-                      <button className="button" disabled={!canFinish} onClick={() => handleMarkDelivered(delivery)}>
+                      <button className="button" onClick={() => handleMarkDelivered(delivery)}>
                         <Check size={18} /> Marcar entregue
                       </button>
-                      {manualFinishAllowed && !delivery.arrival_notified_at && (
-                        <p className="small-text">
-                          GPS não confirmou chegada, mas o botão foi liberado por tempo de segurança.
-                        </p>
-                      )}
-                      {!canFinish && (
-                        <p className="small-text">
-                          Chegue a até {arrivalRadiusMeters} m do destino ou aguarde até {formatTimeOnly(manualFinishAvailableAt)} para liberar Entregue.
-                          {distance !== null ? ` Distância atual: ${formatDistance(distance)}.` : ' Ligue o GPS para calcular a distância.'}
-                        </p>
-                      )}
+                      <p className="small-text">
+                        Finalização liberada sem trava de localização enquanto ajustamos o rastreamento.
+                        {distance !== null ? ` Distância estimada: ${formatDistance(distance)}.` : ''}
+                      </p>
                     </>
                   )}
                 </div>

@@ -523,6 +523,89 @@ async function rejectDeliveryFromTelegram(chatId: string, deliveryId?: string | 
   };
 }
 
+async function markDeliveredFromTelegram(chatId: string, deliveryId?: string | null): Promise<DriverCommandResult> {
+  const supabase = createSupabaseAdmin();
+  if (!supabase) {
+    return { ok: false, command: 'delivered', message: 'Servidor sem acesso administrativo ao Supabase.' };
+  }
+
+  const { data: rider, error: riderError } = await supabase
+    .from('motorcyclists')
+    .select('id,is_online')
+    .eq('telegram_chat_id', chatId)
+    .maybeSingle();
+
+  if (riderError || !rider) {
+    return { ok: false, command: 'delivered', message: 'Nao encontrei seu cadastro pelo Telegram.' };
+  }
+
+  let query = supabase
+    .from('deliveries')
+    .select('id,created_at,departed_at')
+    .eq('motorcyclist_id', rider.id)
+    .eq('status', 'out_for_delivery')
+    .order('departed_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (deliveryId) query = query.eq('id', deliveryId);
+
+  const { data: deliveryRows, error: deliveryError } = await query;
+  const delivery = deliveryRows?.[0];
+
+  if (deliveryError || !delivery) {
+    return { ok: false, command: 'delivered', message: deliveryError?.message ?? 'Nenhuma entrega em rota para finalizar.' };
+  }
+
+  const now = new Date();
+  const createdAt = new Date(delivery.created_at);
+  const totalDurationSeconds = Number.isNaN(createdAt.getTime())
+    ? 0
+    : Math.max(0, Math.round((now.getTime() - createdAt.getTime()) / 1000));
+
+  const { error: updateError } = await supabase
+    .from('deliveries')
+    .update({
+      status: 'delivered',
+      arrival_notified_at: now.toISOString(),
+      departed_at: delivery.departed_at ?? now.toISOString(),
+      delivered_at: now.toISOString(),
+      total_duration_seconds: totalDurationSeconds,
+      updated_at: now.toISOString(),
+    })
+    .eq('id', delivery.id)
+    .eq('motorcyclist_id', rider.id)
+    .eq('status', 'out_for_delivery');
+
+  if (updateError) {
+    return { ok: false, command: 'delivered', delivery_id: delivery.id, message: updateError.message };
+  }
+
+  const { count } = await supabase
+    .from('deliveries')
+    .select('id', { count: 'exact', head: true })
+    .eq('motorcyclist_id', rider.id)
+    .in('status', ['assigned', 'accepted', 'out_for_delivery']);
+
+  if ((count ?? 0) === 0) {
+    await supabase
+      .from('motorcyclists')
+      .update({
+        available: Boolean(rider.is_online),
+        updated_at: now.toISOString(),
+      })
+      .eq('id', rider.id);
+  }
+
+  return {
+    ok: true,
+    command: 'delivered',
+    delivery_id: delivery.id,
+    motorcyclist_id: rider.id,
+    message: 'Entrega finalizada.',
+  };
+}
+
 async function clearMessageKeyboard(chatId?: string | number | null, messageId?: number | null) {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   if (!botToken || !chatId || !messageId) return;
@@ -679,8 +762,13 @@ async function processDriverCommand(payload: TelegramWebhookPayload) {
   const manualRejectResult = command === 'reject'
     ? await rejectDeliveryFromTelegram(String(chatId), callbackDeliveryId)
     : null;
+  const manualDeliveredResult = command === 'delivered'
+    ? await markDeliveredFromTelegram(String(chatId), callbackDeliveryId)
+    : null;
 
-  const rpcResult = manualRejectResult ? { data: manualRejectResult, error: null } : await supabase.rpc('telegram_handle_driver_command', {
+  const manualResult = manualRejectResult ?? manualDeliveredResult;
+
+  const rpcResult = manualResult ? { data: manualResult, error: null } : await supabase.rpc('telegram_handle_driver_command', {
     telegram_chat_id_input: String(chatId),
     command_input: callbackDeliveryId ? `${command}:${callbackDeliveryId}` : command,
   });

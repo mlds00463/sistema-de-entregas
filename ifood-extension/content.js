@@ -1,8 +1,16 @@
 (() => {
   const config = window.MADALENA_IFOOD_CONFIG;
-  const extensionVersion = '0.2.5';
-  const targetStorageKey = 'sistemasPiIfoodTargetUrlV2';
+  const extensionVersion = '0.2.6';
+  const targetStorageKey = 'sistemasPiIfoodTargetUrlV3';
+  const sentOrdersStorageKey = 'sistemasPiIfoodSentOrders';
+  const autoImportStorageKey = 'sistemasPiIfoodAutoImport';
+  const sentOrders = new Set(JSON.parse(localStorage.getItem(sentOrdersStorageKey) || '[]'));
   let lastFoundCount = 0;
+  let autoImportInFlight = false;
+
+  function saveSentOrders() {
+    localStorage.setItem(sentOrdersStorageKey, JSON.stringify([...sentOrders].slice(-500)));
+  }
 
   function log(message) {
     const panel = ensurePanel();
@@ -51,11 +59,14 @@
 
     const importFirstButton = createButton('Abrir 1 pedido', '#22c55e', '#052e16', () => openFirstOrder());
     const importAllButton = createButton('Enviar lista', '#38bdf8', '#082f49', () => openAllOrders());
+    const autoButton = createButton('', '#86efac', '#052e16', () => toggleAutoImport());
+    autoButton.dataset.autoToggle = 'true';
     const productionButton = createButton('', '#facc15', '#422006', () => toggleTargetUrl());
     productionButton.dataset.targetToggle = 'true';
     const diagnosticButton = createButton('Diagnóstico', '#c4b5fd', '#2e1065', () => showDiagnostic());
+    const resetButton = createButton('Resetar enviados', '#fda4af', '#450a0a', () => resetSentOrders());
 
-    actions.append(importFirstButton, importAllButton, productionButton, diagnosticButton);
+    actions.append(importFirstButton, importAllButton, autoButton, productionButton, diagnosticButton, resetButton);
     panel.appendChild(actions);
 
     const targetLine = document.createElement('div');
@@ -87,6 +98,9 @@
 
     const button = document.querySelector('[data-target-toggle]');
     if (button) button.textContent = currentTargetUrl().includes('localhost') ? 'Usar produção' : 'Usar local';
+
+    const autoButton = document.querySelector('[data-auto-toggle]');
+    if (autoButton) autoButton.textContent = autoImportEnabled() ? 'Auto: ligado' : 'Auto: desligado';
   }
 
   function currentTargetUrl() {
@@ -94,10 +108,29 @@
   }
 
   function toggleTargetUrl() {
-    const next = currentTargetUrl().includes('localhost') ? config.productionUrl : config.targetUrl;
+    const next = currentTargetUrl().includes('localhost') ? config.productionUrl : (config.localUrl || 'http://localhost:3001/loja/dashboard');
     localStorage.setItem(targetStorageKey, next);
     updateTargetLine();
     log(`Destino alterado para ${next}`);
+  }
+
+  function autoImportEnabled() {
+    return localStorage.getItem(autoImportStorageKey) !== '0';
+  }
+
+  function toggleAutoImport() {
+    const next = autoImportEnabled() ? '0' : '1';
+    localStorage.setItem(autoImportStorageKey, next);
+    updateTargetLine();
+    log(next === '1' ? 'Importacao automatica ativada.' : 'Importacao automatica pausada.');
+    if (next === '1') autoSendNewOrders();
+  }
+
+  function resetSentOrders() {
+    sentOrders.clear();
+    saveSentOrders();
+    log('Historico de pedidos enviados resetado.');
+    autoSendNewOrders();
   }
 
   function onlyDigits(value = '') {
@@ -346,7 +379,29 @@
     }
 
     window.open(buildBatchImportUrl(orders), '_blank');
+    orders.forEach(({ order }) => {
+      if (order.orderId) sentOrders.add(String(order.orderId));
+    });
+    saveSentOrders();
     log(`Enviando ${Math.min(orders.length, 25)} pedido(s) para a lista do sistema.`);
+  }
+
+  function autoSendNewOrders() {
+    if (!autoImportEnabled() || autoImportInFlight) return;
+    autoImportInFlight = true;
+
+    try {
+      const orders = readVisibleOrders();
+      const newOrders = orders.filter(({ order }) => order.orderId && !sentOrders.has(String(order.orderId)));
+      if (!newOrders.length) return;
+
+      const opened = window.open(buildBatchImportUrl(newOrders), '_blank');
+      newOrders.forEach(({ order }) => sentOrders.add(String(order.orderId)));
+      saveSentOrders();
+      log(`${newOrders.length} pedido(s) novo(s) enviados automaticamente.${opened ? '' : ' O navegador pode ter bloqueado a aba.'}`);
+    } finally {
+      autoImportInFlight = false;
+    }
   }
 
   function showDiagnostic() {
@@ -364,9 +419,11 @@
   }
 
   ensurePanel();
-  log('Extensao ativa. Abra a tela de pedidos do iFood.');
+  log('Extensao ativa. Importacao automatica ligada por padrao.');
+  window.setTimeout(autoSendNewOrders, 1200);
   window.setInterval(() => {
     const orders = readVisibleOrders();
     if (orders.length !== lastFoundCount) log(`Pedidos reconhecidos nesta tela: ${orders.length}`);
+    autoSendNewOrders();
   }, config.pollIntervalMs || 8000);
 })();
