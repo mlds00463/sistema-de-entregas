@@ -52,6 +52,25 @@ type DriverCommandResult = {
   motorcyclist_id?: string;
 };
 
+type DeliveryForReject = {
+  id: string;
+  shop_id: string;
+  motorcyclist_id: string | null;
+  origin_address: string;
+  destination_address: string;
+  destination_zipcode: string | null;
+  destination_number: string | null;
+  destination_complement: string | null;
+  destination_neighborhood: string | null;
+  destination_city: string | null;
+  destination_state: string | null;
+  destination_latitude?: number | null;
+  destination_longitude?: number | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  created_by: string | null;
+};
+
 type TelegramReplyMarkup = {
   inline_keyboard: Array<Array<{
     text: string;
@@ -371,6 +390,139 @@ async function notifyAssignedDelivery(deliveryId?: string | null) {
   );
 }
 
+async function rejectDeliveryFromTelegram(chatId: string, deliveryId?: string | null): Promise<DriverCommandResult> {
+  const supabase = createSupabaseAdmin();
+  if (!supabase) {
+    return { ok: false, command: 'reject', message: 'Servidor sem acesso administrativo ao Supabase.' };
+  }
+
+  const { data: rider, error: riderError } = await supabase
+    .from('motorcyclists')
+    .select('id,current_shop_id,is_online')
+    .eq('telegram_chat_id', chatId)
+    .maybeSingle();
+
+  if (riderError || !rider) {
+    return { ok: false, command: 'reject', message: 'Nao encontrei seu cadastro pelo Telegram.' };
+  }
+
+  let query = supabase
+    .from('deliveries')
+    .select([
+      'id',
+      'shop_id',
+      'motorcyclist_id',
+      'origin_address',
+      'destination_address',
+      'destination_zipcode',
+      'destination_number',
+      'destination_complement',
+      'destination_neighborhood',
+      'destination_city',
+      'destination_state',
+      'destination_latitude',
+      'destination_longitude',
+      'customer_name',
+      'customer_phone',
+      'created_by',
+    ].join(','))
+    .eq('motorcyclist_id', rider.id)
+    .eq('status', 'assigned')
+    .order('assigned_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (deliveryId) query = query.eq('id', deliveryId);
+
+  const { data: deliveryRows, error: deliveryError } = await query.returns<DeliveryForReject[]>();
+  const delivery = deliveryRows?.[0];
+
+  if (deliveryError || !delivery) {
+    return { ok: false, command: 'reject', message: deliveryError?.message ?? 'Nenhuma corrida pendente para recusar.' };
+  }
+
+  const { error: rejectError } = await supabase
+    .from('deliveries')
+    .update({
+      status: 'rejected',
+      rejected_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', delivery.id)
+    .eq('motorcyclist_id', rider.id)
+    .eq('status', 'assigned');
+
+  if (rejectError) {
+    return { ok: false, command: 'reject', delivery_id: delivery.id, message: rejectError.message };
+  }
+
+  await supabase
+    .from('motorcyclists')
+    .update({ available: true, updated_at: new Date().toISOString() })
+    .eq('id', rider.id)
+    .eq('is_online', true);
+
+  const { data: nextRider } = await supabase
+    .from('motorcyclists')
+    .select('id')
+    .eq('current_shop_id', delivery.shop_id)
+    .eq('is_online', true)
+    .eq('available', true)
+    .neq('id', rider.id)
+    .order('last_assigned_at', { ascending: true, nullsFirst: true })
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  let nextDeliveryId: string | null = null;
+
+  if (nextRider?.id) {
+    await supabase
+      .from('motorcyclists')
+      .update({
+        available: false,
+        last_assigned_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', nextRider.id);
+
+    const { data: inserted } = await supabase
+      .from('deliveries')
+      .insert({
+        shop_id: delivery.shop_id,
+        motorcyclist_id: nextRider.id,
+        origin_address: delivery.origin_address,
+        destination_address: delivery.destination_address,
+        destination_zipcode: delivery.destination_zipcode,
+        destination_number: delivery.destination_number,
+        destination_complement: delivery.destination_complement,
+        destination_neighborhood: delivery.destination_neighborhood,
+        destination_city: delivery.destination_city,
+        destination_state: delivery.destination_state,
+        destination_latitude: delivery.destination_latitude ?? null,
+        destination_longitude: delivery.destination_longitude ?? null,
+        customer_name: delivery.customer_name,
+        customer_phone: delivery.customer_phone,
+        status: 'assigned',
+        assigned_at: new Date().toISOString(),
+        created_by: delivery.created_by,
+      })
+      .select('id')
+      .single();
+
+    nextDeliveryId = inserted?.id ?? null;
+  }
+
+  return {
+    ok: true,
+    command: 'reject',
+    delivery_id: delivery.id,
+    next_delivery_id: nextDeliveryId,
+    motorcyclist_id: rider.id,
+    message: 'Corrida recusada.',
+  };
+}
+
 async function clearMessageKeyboard(chatId?: string | number | null, messageId?: number | null) {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   if (!botToken || !chatId || !messageId) return;
@@ -524,10 +676,15 @@ async function processDriverCommand(payload: TelegramWebhookPayload) {
     return;
   }
 
-  const { data, error } = await supabase.rpc('telegram_handle_driver_command', {
+  const manualRejectResult = command === 'reject'
+    ? await rejectDeliveryFromTelegram(String(chatId), callbackDeliveryId)
+    : null;
+
+  const rpcResult = manualRejectResult ? { data: manualRejectResult, error: null } : await supabase.rpc('telegram_handle_driver_command', {
     telegram_chat_id_input: String(chatId),
     command_input: callbackDeliveryId ? `${command}:${callbackDeliveryId}` : command,
   });
+  const { data, error } = rpcResult;
 
   if (callback) {
     await answerCallbackQuery(callback.id, error ? 'Nao consegui processar.' : 'Processado.');
